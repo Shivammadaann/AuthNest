@@ -1,0 +1,5 @@
+{
+  "name": "Auth Nest",
+  "description": "A vault-first password manager and authenticator platform focused on credentials, 2FA setup, and security health.",
+  "requestFramePermissions": []
+}

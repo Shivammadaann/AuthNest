@@ -1,0 +1,233 @@
+// ===============================================================
+// Assumed Data Model
+// ===============================================================
+//
+// Collection: accounts
+// Document ID: auto-generated
+// Fields:
+//   - id: string (required) - Unique ID
+//   - issuer: string (required) - Service provider
+//   - name: string (optional) - Account identifier
+//   - secret: string (required) - Base32 secret
+//   - userId: string (required) - Owner UID
+//   - folderId: string (optional) - Folder ID
+//   - vaultItemId: string (optional) - Linked vault item ID
+//   - createdAt: timestamp (optional) - Creation time
+//
+// Collection: folders
+// Document ID: auto-generated
+// Fields:
+//   - id: string (required) - Unique ID
+//   - name: string (required) - Folder name
+//   - userId: string (required) - Owner UID
+//   - createdAt: timestamp (optional) - Creation time
+//
+// Collection: passwords
+// Document ID: auto-generated
+// Fields:
+//   - id: string (required) - Unique ID
+//   - title: string (required) - Service title
+//   - accountName: string (optional) - Account label
+//   - username: string (required) - Username/Email
+//   - password: string (required) - Password
+//   - url: string (optional) - Website URL
+//   - notes: string (optional) - Extra notes
+//   - userId: string (required) - Owner UID
+//   - folderId: string (optional) - Folder ID
+//   - createdAt: timestamp (optional) - Creation time
+//
+// ===============================================================
+
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Helper Functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isValidAccount(data) {
+      let allowedFields = ['id', 'issuer', 'name', 'secret', 'userId', 'folderId', 'vaultItemId', 'createdAt'];
+      return data.keys().hasOnly(allowedFields) &&
+             data.keys().hasAll(['id', 'issuer', 'secret', 'userId']) &&
+             data.id is string && data.id.size() > 0 && data.id.size() < 100 &&
+             data.issuer is string && data.issuer.size() > 0 && data.issuer.size() < 100 &&
+             (!('name' in data) || data.name == null || (data.name is string && data.name.size() < 100)) &&
+             data.secret is string && data.secret.size() > 0 && data.secret.size() < 200 &&
+             data.userId == request.auth.uid &&
+             (!('folderId' in data) || data.folderId == null || (data.folderId is string && data.folderId.size() < 100)) &&
+             (!('vaultItemId' in data) || data.vaultItemId == null || (data.vaultItemId is string && data.vaultItemId.size() < 100)) &&
+             (!('createdAt' in data) || data.createdAt is timestamp);
+    }
+
+    function isValidAccountUpdate(data) {
+      return isValidAccount(data) &&
+             data.id == resource.data.id &&
+             data.userId == resource.data.userId &&
+             (!('createdAt' in resource.data) || data.createdAt == resource.data.createdAt);
+    }
+
+    function isValidFolder(data) {
+      let allowedFields = ['id', 'name', 'userId', 'createdAt'];
+      return data.keys().hasOnly(allowedFields) &&
+             data.keys().hasAll(['id', 'name', 'userId']) &&
+             data.id is string && data.id.size() > 0 && data.id.size() < 100 &&
+             data.name is string && data.name.size() > 0 && data.name.size() < 100 &&
+             data.userId == request.auth.uid &&
+             (!('createdAt' in data) || data.createdAt is timestamp);
+    }
+
+    function isValidFolderUpdate(data) {
+      return isValidFolder(data) &&
+             data.id == resource.data.id &&
+             data.userId == resource.data.userId &&
+             (!('createdAt' in resource.data) || data.createdAt == resource.data.createdAt);
+    }
+
+    function isValidPassword(data) {
+      let allowedFields = ['id', 'title', 'accountName', 'username', 'password', 'url', 'notes', 'userId', 'folderId', 'createdAt'];
+      return data.keys().hasOnly(allowedFields) &&
+             data.keys().hasAll(['id', 'title', 'username', 'password', 'userId']) &&
+             data.id is string && data.id.size() > 0 && data.id.size() < 100 &&
+             data.title is string && data.title.size() > 0 && data.title.size() < 200 &&
+             (!('accountName' in data) || data.accountName == null || (data.accountName is string && data.accountName.size() < 200)) &&
+             data.username is string && data.username.size() > 0 && data.username.size() < 200 &&
+             data.password is string && data.password.size() > 0 && data.password.size() < 500 &&
+             (!('url' in data) || data.url == null || (data.url is string && data.url.size() < 500)) &&
+             (!('notes' in data) || data.notes == null || (data.notes is string && data.notes.size() < 2000)) &&
+             data.userId == request.auth.uid &&
+             (!('folderId' in data) || data.folderId == null || (data.folderId is string && data.folderId.size() < 100)) &&
+             (!('createdAt' in data) || data.createdAt is timestamp);
+    }
+
+    function isValidPasswordUpdate(data) {
+      return isValidPassword(data) &&
+             data.id == resource.data.id &&
+             data.userId == resource.data.userId &&
+             (!('createdAt' in resource.data) || data.createdAt == resource.data.createdAt);
+    }
+
+    function isValidLink(data) {
+      let allowedFields = ['id', 'title', 'url', 'description', 'userId', 'folderId', 'createdAt'];
+      return data.keys().hasOnly(allowedFields) &&
+             data.keys().hasAll(['id', 'title', 'url', 'userId']) &&
+             data.id is string && data.id.size() > 0 && data.id.size() < 100 &&
+             data.title is string && data.title.size() > 0 && data.title.size() < 200 &&
+             data.url is string && data.url.size() > 0 && data.url.size() < 1000 &&
+             (!('description' in data) || data.description == null || (data.description is string && data.description.size() < 2000)) &&
+             data.userId == request.auth.uid &&
+             (!('folderId' in data) || data.folderId == null || (data.folderId is string && data.folderId.size() < 100)) &&
+             (!('createdAt' in data) || data.createdAt is timestamp);
+    }
+
+    function isValidLinkUpdate(data) {
+      return isValidLink(data) &&
+             data.id == resource.data.id &&
+             data.userId == resource.data.userId &&
+             (!('createdAt' in resource.data) || data.createdAt == resource.data.createdAt);
+    }
+
+    function isValidDevItem(data) {
+      let allowedFields = ['id', 'title', 'type', 'content', 'language', 'repoUrl', 'tags', 'userId', 'folderId', 'createdAt', 'envVars', 'versions'];
+      return data.keys().hasOnly(allowedFields) &&
+             data.keys().hasAll(['id', 'title', 'type', 'userId']) &&
+             data.id is string && data.id.size() > 0 && data.id.size() < 100 &&
+             data.title is string && data.title.size() > 0 && data.title.size() < 200 &&
+             data.type in ['snippet', 'apikey', 'env', 'note', 'link'] &&
+             (!('content' in data) || data.content == null || (data.content is string && data.content.size() < 100000)) &&
+             (!('language' in data) || data.language == null || (data.language is string && data.language.size() < 50)) &&
+             (!('repoUrl' in data) || data.repoUrl == null || (data.repoUrl is string && data.repoUrl.size() < 500)) &&
+             (!('tags' in data) || data.tags == null || (data.tags is list && data.tags.size() < 20)) &&
+             (!('envVars' in data) || data.envVars == null || data.envVars is list) &&
+             (!('versions' in data) || data.versions == null || data.versions is list) &&
+             data.userId == request.auth.uid &&
+             (!('folderId' in data) || data.folderId == null || (data.folderId is string && data.folderId.size() < 100)) &&
+             (!('createdAt' in data) || data.createdAt is timestamp);
+    }
+
+    function isValidDevItemUpdate(data) {
+      return isValidDevItem(data) &&
+             data.id == resource.data.id &&
+             data.userId == resource.data.userId &&
+             (!('createdAt' in resource.data) || data.createdAt == resource.data.createdAt);
+    }
+
+    function isValidExternalApp(data) {
+      let allowedFields = ['id', 'name', 'url', 'iconDataUrl', 'userId', 'createdAt'];
+      return data.keys().hasOnly(allowedFields) &&
+             data.keys().hasAll(['id', 'name', 'url', 'iconDataUrl', 'userId']) &&
+             data.id is string && data.id.size() > 0 && data.id.size() < 100 &&
+             data.name is string && data.name.size() > 0 && data.name.size() < 120 &&
+             data.url is string && data.url.size() > 0 && data.url.size() < 1000 &&
+             data.iconDataUrl is string && data.iconDataUrl.size() > 0 && data.iconDataUrl.size() < 500000 &&
+             data.userId == request.auth.uid &&
+             (!('createdAt' in data) || data.createdAt is timestamp);
+    }
+
+    function isValidExternalAppUpdate(data) {
+      return isValidExternalApp(data) &&
+             data.id == resource.data.id &&
+             data.userId == resource.data.userId &&
+             (!('createdAt' in resource.data) || data.createdAt == resource.data.createdAt);
+    }
+
+    match /accounts/{accountId} {
+      allow get: if isAuthenticated() && (resource == null || resource.data.userId == request.auth.uid);
+      allow list: if isAuthenticated();
+      allow create: if isAuthenticated() && isValidAccount(request.resource.data);
+      allow update: if isAuthenticated() && isOwner(resource.data.userId) && isValidAccountUpdate(request.resource.data);
+      allow delete: if isAuthenticated() && isOwner(resource.data.userId);
+    }
+
+    match /folders/{folderId} {
+      allow get: if isAuthenticated() && (resource == null || resource.data.userId == request.auth.uid);
+      allow list: if isAuthenticated();
+      allow create: if isAuthenticated() && isValidFolder(request.resource.data);
+      allow update: if isAuthenticated() && isOwner(resource.data.userId) && isValidFolderUpdate(request.resource.data);
+      allow delete: if isAuthenticated() && isOwner(resource.data.userId);
+    }
+
+    match /passwords/{passwordId} {
+      allow get: if isAuthenticated() && (resource == null || resource.data.userId == request.auth.uid);
+      allow list: if isAuthenticated();
+      allow create: if isAuthenticated() && isValidPassword(request.resource.data);
+      allow update: if isAuthenticated() && isOwner(resource.data.userId) && isValidPasswordUpdate(request.resource.data);
+      allow delete: if isAuthenticated() && isOwner(resource.data.userId);
+    }
+
+    match /links/{linkId} {
+      allow get: if isAuthenticated() && (resource == null || resource.data.userId == request.auth.uid);
+      allow list: if isAuthenticated();
+      allow create: if isAuthenticated() && isValidLink(request.resource.data);
+      allow update: if isAuthenticated() && isOwner(resource.data.userId) && isValidLinkUpdate(request.resource.data);
+      allow delete: if isAuthenticated() && isOwner(resource.data.userId);
+    }
+
+    match /devitems/{itemId} {
+      allow get: if isAuthenticated() && (resource == null || resource.data.userId == request.auth.uid);
+      allow list: if isAuthenticated();
+      allow create: if isAuthenticated() && isValidDevItem(request.resource.data);
+      allow update: if isAuthenticated() && isOwner(resource.data.userId) && isValidDevItemUpdate(request.resource.data);
+      allow delete: if isAuthenticated() && isOwner(resource.data.userId);
+    }
+
+    match /externalapps/{appId} {
+      allow get: if isAuthenticated() && (resource == null || resource.data.userId == request.auth.uid);
+      allow list: if isAuthenticated();
+      allow create: if isAuthenticated() && isValidExternalApp(request.resource.data);
+      allow update: if isAuthenticated() && isOwner(resource.data.userId) && isValidExternalAppUpdate(request.resource.data);
+      allow delete: if isAuthenticated() && isOwner(resource.data.userId);
+    }
+
+    
+    // Default deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

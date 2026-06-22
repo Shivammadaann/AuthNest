@@ -1,0 +1,81 @@
+{
+  "entities": {
+    "Folder": {
+      "title": "Folder",
+      "description": "A folder to organize accounts or passwords",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "userId": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "name", "userId"]
+    },
+    "Account": {
+      "title": "Account",
+      "description": "A 2FA account stored for a user",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique ID for the account" },
+        "issuer": { "type": "string", "description": "Service provider name (e.g. Google, GitHub)" },
+        "name": { "type": "string", "description": "User's account identifier (e.g. email)" },
+        "secret": { "type": "string", "description": "Base32 encoded TOTP secret key" },
+        "userId": { "type": "string", "description": "UID of the owner" },
+        "folderId": { "type": "string", "description": "ID of the folder this account belongs to" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "When the account was added" }
+      },
+      "required": ["id", "issuer", "secret", "userId"]
+    },
+    "Password": {
+      "title": "Password",
+      "description": "A password entry stored for a user",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "title": { "type": "string", "description": "Name of the service or website" },
+        "username": { "type": "string" },
+        "password": { "type": "string" },
+        "url": { "type": "string" },
+        "notes": { "type": "string" },
+        "userId": { "type": "string" },
+        "folderId": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "title", "username", "password", "userId"]
+    },
+    "Link": {
+      "title": "Link",
+      "description": "A saved URL/bookmark",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "title": { "type": "string", "description": "Name of the link" },
+        "url": { "type": "string", "description": "The URL itself" },
+        "description": { "type": "string", "description": "Optional description" },
+        "userId": { "type": "string" },
+        "folderId": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "title", "url", "userId"]
+    }
+  },
+  "firestore": {
+    "/accounts/{accountId}": {
+      "schema": "Account",
+      "description": "Collection of 2FA accounts"
+    },
+    "/folders/{folderId}": {
+      "schema": "Folder",
+      "description": "Collection of folders"
+    },
+    "/passwords/{passwordId}": {
+      "schema": "Password",
+      "description": "Collection of stored passwords"
+    },
+    "/links/{linkId}": {
+      "schema": "Link",
+      "description": "Collection of saved links"
+    }
+  }
+}
