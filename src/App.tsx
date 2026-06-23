@@ -1,9 +1,6 @@
 import React, { Component, startTransition, useDeferredValue, useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle,
-  BadgeCheck,
-  Check,
-  ChevronRight,
   Copy,
   Download,
   Edit3,
@@ -11,7 +8,6 @@ import {
   Folder,
   FolderPlus,
   Globe,
-  House,
   Info,
   KeyRound,
   LifeBuoy,
@@ -23,19 +19,14 @@ import {
   MoreHorizontal,
   Plus,
   QrCode,
-  RefreshCcw,
   ScanLine,
   Search,
   Settings2,
-  Shield,
-  ShieldAlert,
   ShieldCheck,
-  Sparkles,
   Sun,
   Trash2,
   Upload,
   User,
-  Wand2,
   X,
 } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
@@ -53,7 +44,7 @@ import { Label } from './components/ui/label';
 import { Toaster } from './components/ui/sonner';
 import { auth, db } from './firebase';
 import { buildOtpauthUri, isBase32Secret, normalizeSecret, parseOtpauthPayload } from './lib/otpauth';
-import { DEFAULT_GENERATOR_OPTIONS, type GeneratorOptions, generatePasswordValue, scorePasswordStrength, type PasswordStrength } from './lib/passwords';
+import { scorePasswordStrength, type PasswordStrength } from './lib/passwords';
 import { generateTOTP, getRemainingSeconds } from './lib/totp';
 import authenticatorIcon from '../icons/authenticator.svg';
 import appleIcon from '../icons/platforms/Apple Logo.png';
@@ -138,13 +129,17 @@ interface VaultItem {
 }
 
 interface VaultFormState {
+  entryType: VaultEntryType;
   platform: string;
-  accountName: string;
   username: string;
   password: string;
   loginUrl: string;
   folderId: string;
   remarks: string;
+  totpIssuer: string;
+  totpUsername: string;
+  totpSecret: string;
+  totpMethod: AuthenticatorMethod;
 }
 
 interface AuthenticatorFormState {
@@ -166,10 +161,11 @@ interface ErrorBoundaryState {
   hasError: boolean;
 }
 
-type AppPage = 'home' | 'vault' | 'generator' | 'settings' | 'help';
+type AppPage = 'vault' | 'settings' | 'help';
 type AuthMode = 'signin' | 'signup';
 type SettingsSection = 'profile' | 'security' | 'vault' | 'appearance';
 type AuthenticatorMethod = 'secret' | 'scan';
+type VaultEntryType = 'credentials' | 'authenticator' | 'both';
 
 enum OperationType {
   CREATE = 'create',
@@ -182,13 +178,17 @@ enum OperationType {
 const APP_NAME = 'Auth Nest';
 
 const INITIAL_VAULT_FORM: VaultFormState = {
+  entryType: 'credentials',
   platform: '',
-  accountName: '',
   username: '',
   password: '',
   loginUrl: '',
   folderId: '',
   remarks: '',
+  totpIssuer: '',
+  totpUsername: '',
+  totpSecret: '',
+  totpMethod: 'secret',
 };
 
 const INITIAL_AUTHENTICATOR_FORM: AuthenticatorFormState = {
@@ -227,26 +227,12 @@ const PAGE_CONFIG: Record<
     icon: React.ComponentType<{ className?: string }>;
   }
 > = {
-  home: {
-    hash: '#/home',
-    label: 'Home',
-    title: 'Home Dashboard',
-    description: 'A focused view of your vault health, weak passwords, and recent activity.',
-    icon: House,
-  },
   vault: {
     hash: '#/vault',
     label: 'Vault',
     title: 'Vault',
-    description: 'Store credentials and attach authenticator secrets to the same vault item.',
+    description: 'Store credentials and authenticator keys for each account.',
     icon: KeyRound,
-  },
-  generator: {
-    hash: '#/generator',
-    label: 'Password Generator',
-    title: 'Password Generator',
-    description: 'Generate strong passwords and push them directly into a new vault item.',
-    icon: Wand2,
   },
   settings: {
     hash: '#/settings',
@@ -284,9 +270,9 @@ function createId() {
 }
 
 function getPageFromHash(hash: string): AppPage {
-  const normalizedHash = hash.toLowerCase() || PAGE_CONFIG.home.hash;
+  const normalizedHash = hash.toLowerCase() || PAGE_CONFIG.vault.hash;
   const match = Object.entries(PAGE_CONFIG).find(([, page]) => page.hash === normalizedHash);
-  return (match?.[0] as AppPage) || 'home';
+  return (match?.[0] as AppPage) || 'vault';
 }
 
 function getTimestampMs(timestamp?: Timestamp | null) {
@@ -531,7 +517,7 @@ function AppContent() {
   const [authSubmitting, setAuthSubmitting] = useState(false);
   const [activePage, setActivePage] = useState<AppPage>(() => {
     if (typeof window === 'undefined') {
-      return 'home';
+      return 'vault';
     }
 
     return getPageFromHash(window.location.hash);
@@ -561,10 +547,6 @@ function AppContent() {
   const [importJson, setImportJson] = useState('');
   const [qrPreviewAccount, setQrPreviewAccount] = useState<Account | null>(null);
   const [signOutDialogOpen, setSignOutDialogOpen] = useState(false);
-  const [isVaultLocked, setIsVaultLocked] = useState(false);
-  const [lastLockedAt, setLastLockedAt] = useState<Date | null>(null);
-  const [generatorOptions, setGeneratorOptions] = useState<GeneratorOptions>(DEFAULT_GENERATOR_OPTIONS);
-  const [generatedPassword, setGeneratedPassword] = useState(() => generatePasswordValue(DEFAULT_GENERATOR_OPTIONS));
   const [profileDisplayName, setProfileDisplayName] = useState('');
   const [profilePhotoDataUrl, setProfilePhotoDataUrl] = useState('');
   const [profileSubmitting, setProfileSubmitting] = useState(false);
@@ -602,8 +584,8 @@ function AppContent() {
       return;
     }
 
-    if (!window.location.hash) {
-      window.history.replaceState(null, '', PAGE_CONFIG.home.hash);
+    if (!window.location.hash || window.location.hash === '#/home' || window.location.hash === '#/generator') {
+      window.history.replaceState(null, '', PAGE_CONFIG.vault.hash);
     }
 
     const handleHashChange = () => {
@@ -627,7 +609,6 @@ function AppContent() {
       setAccounts([]);
       setPasswords([]);
       setFolders([]);
-      setIsVaultLocked(false);
       return;
     }
 
@@ -711,10 +692,6 @@ function AppContent() {
   }, [user]);
 
   useEffect(() => {
-    setGeneratedPassword(generatePasswordValue(generatorOptions));
-  }, [generatorOptions]);
-
-  useEffect(() => {
     let cancelled = false;
 
     const updateCodes = async () => {
@@ -791,8 +768,6 @@ function AppContent() {
     }));
   }, [accountByVaultId, folderMap, sortedPasswords]);
 
-  const recentItems = useMemo(() => vaultItems.slice(0, 5), [vaultItems]);
-
   const normalizedSearch = deferredVaultSearch.trim().toLowerCase();
 
   const filteredVaultItems = useMemo(() => {
@@ -841,59 +816,6 @@ function AppContent() {
       return haystack.includes(normalizedSearch);
     });
   }, [normalizedSearch, passwordIdSet, selectedFolderId, sortedAccounts]);
-
-  const weakPasswordCount = useMemo(() => {
-    return vaultItems.filter((item) => item.strength.isWeak).length;
-  }, [vaultItems]);
-
-  const authenticatorEnabledCount = useMemo(() => {
-    return vaultItems.filter((item) => Boolean(item.account)).length;
-  }, [vaultItems]);
-
-  const vaultHealth = useMemo(() => {
-    if (!vaultItems.length) {
-      return 0;
-    }
-
-    const averageStrength = vaultItems.reduce((total, item) => total + item.strength.score, 0) / vaultItems.length;
-    const authCoverage = authenticatorEnabledCount / vaultItems.length;
-
-    return Math.round(averageStrength * 0.72 + authCoverage * 28);
-  }, [authenticatorEnabledCount, vaultItems]);
-
-  const generatedPasswordStrength = useMemo(() => {
-    return scorePasswordStrength(generatedPassword);
-  }, [generatedPassword]);
-
-  const securitySuggestions = useMemo(() => {
-    const suggestions: string[] = [];
-
-    if (!vaultItems.length) {
-      suggestions.push('Add your first vault item to start tracking password strength and authenticator coverage.');
-    }
-
-    if (weakPasswordCount > 0) {
-      suggestions.push(`${weakPasswordCount} vault item${weakPasswordCount === 1 ? '' : 's'} need stronger passwords. Regenerate them with the Password Generator.`);
-    }
-
-    if (vaultItems.length > authenticatorEnabledCount) {
-      suggestions.push(`${vaultItems.length - authenticatorEnabledCount} vault item${vaultItems.length - authenticatorEnabledCount === 1 ? '' : 's'} do not have a linked authenticator yet.`);
-    }
-
-    if (folders.length === 0) {
-      suggestions.push('Create folders in Settings to keep work, personal, and shared accounts separated.');
-    }
-
-    if (orphanAccounts.length > 0) {
-      suggestions.push(`${orphanAccounts.length} older authenticator record${orphanAccounts.length === 1 ? ' is' : 's are'} still standalone. Link them to vault items when you review them.`);
-    }
-
-    if (!suggestions.length) {
-      suggestions.push('Your vault is in good shape. Keep rotating older passwords and add authenticators to new accounts.');
-    }
-
-    return suggestions.slice(0, 4);
-  }, [authenticatorEnabledCount, folders.length, orphanAccounts.length, vaultItems, weakPasswordCount]);
 
   const navigateToPage = (page: AppPage) => {
     setMobileSidebarOpen(false);
@@ -1009,13 +931,17 @@ function AppContent() {
     setEditingVaultItem(item.password);
     setPendingLinkAccountId(null);
     setVaultForm({
+      entryType: 'credentials',
       platform: item.password.title,
-      accountName: item.password.accountName || '',
       username: item.password.username,
       password: item.password.password,
       loginUrl: item.password.url || '',
       folderId: item.password.folderId || '',
       remarks: item.password.notes || '',
+      totpIssuer: item.account?.issuer || item.password.title,
+      totpUsername: item.account?.name || item.password.accountName || item.password.username,
+      totpSecret: item.account?.secret || '',
+      totpMethod: 'secret',
     });
     setVaultDialogOpen(true);
   };
@@ -1032,38 +958,69 @@ function AppContent() {
       return;
     }
 
+    const shouldSaveCredentials = Boolean(editingVaultItem) || Boolean(pendingLinkAccountId) || vaultForm.entryType === 'credentials' || vaultForm.entryType === 'both';
+    const shouldCreateAuthenticator = !editingVaultItem && !pendingLinkAccountId && (vaultForm.entryType === 'authenticator' || vaultForm.entryType === 'both');
     const platform = vaultForm.platform.trim();
-    const accountName = vaultForm.accountName.trim();
     const username = vaultForm.username.trim();
     const passwordValue = vaultForm.password.trim();
+    const folderId = vaultForm.folderId || null;
 
-    if (!platform || !accountName || !username || !passwordValue) {
-      toast.error('Platform, Account Name, Email / Username, and Password are required.');
+    if (shouldSaveCredentials && (!platform || !username || !passwordValue)) {
+      toast.error('Platform, Email / Username, and Password are required.');
       return;
     }
 
     let loginUrl: string | null = null;
 
-    try {
-      loginUrl = normalizeLoginUrl(vaultForm.loginUrl);
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Enter a valid login URL.');
-      return;
+    if (shouldSaveCredentials) {
+      try {
+        loginUrl = normalizeLoginUrl(vaultForm.loginUrl);
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : 'Enter a valid login URL.');
+        return;
+      }
     }
 
-    const basePayload = {
-      title: platform,
-      accountName,
-      username,
-      password: passwordValue,
-      url: loginUrl,
-      notes: vaultForm.remarks.trim() || null,
-      folderId: vaultForm.folderId || null,
-      userId: user.uid,
-    };
+    const authenticatorIssuer = vaultForm.entryType === 'both' ? platform : vaultForm.totpIssuer.trim();
+    const authenticatorName = vaultForm.entryType === 'both' ? username : vaultForm.totpUsername.trim();
+    const authenticatorSecret = normalizeSecret(vaultForm.totpSecret);
+
+    if (shouldCreateAuthenticator) {
+      if (!authenticatorIssuer || !authenticatorName) {
+        toast.error('Issuer Name and Username/Email are required for the authenticator key.');
+        return;
+      }
+
+      if (!authenticatorSecret) {
+        toast.error(vaultForm.totpMethod === 'scan' ? 'Scan a QR code before saving the authenticator key.' : 'Secret Key is required.');
+        return;
+      }
+
+      if (!isBase32Secret(authenticatorSecret)) {
+        toast.error('Use a valid Base32 secret key.');
+        return;
+      }
+    }
+
+    const basePayload = shouldSaveCredentials
+      ? {
+          title: platform,
+          accountName: username,
+          username,
+          password: passwordValue,
+          url: loginUrl,
+          notes: vaultForm.remarks.trim() || null,
+          folderId,
+          userId: user.uid,
+        }
+      : null;
 
     try {
       if (editingVaultItem?.docId) {
+        if (!basePayload) {
+          return;
+        }
+
         const batch = writeBatch(db);
         batch.update(doc(db, 'passwords', editingVaultItem.docId), basePayload);
 
@@ -1071,15 +1028,19 @@ function AppContent() {
         if (linkedAccount?.docId) {
           batch.update(doc(db, 'accounts', linkedAccount.docId), {
             issuer: platform,
-            name: accountName || username,
-            folderId: vaultForm.folderId || null,
+            name: username,
+            folderId,
             vaultItemId: editingVaultItem.id,
           });
         }
 
         await batch.commit();
-        toast.success('Vault item updated.');
-      } else {
+        toast.success('Account updated.');
+      } else if (shouldSaveCredentials) {
+        if (!basePayload) {
+          return;
+        }
+
         const batch = writeBatch(db);
         const nextVaultItemId = createId();
         const passwordRef = doc(collection(db, 'passwords'));
@@ -1094,20 +1055,46 @@ function AppContent() {
           if (linkedAccount?.docId) {
             batch.update(doc(db, 'accounts', linkedAccount.docId), {
               issuer: platform,
-              name: accountName || username,
-              folderId: vaultForm.folderId || null,
+              name: username,
+              folderId,
               vaultItemId: nextVaultItemId,
             });
           }
         }
 
+        if (shouldCreateAuthenticator) {
+          const accountRef = doc(collection(db, 'accounts'));
+          batch.set(accountRef, {
+            id: createId(),
+            issuer: authenticatorIssuer,
+            name: authenticatorName,
+            secret: authenticatorSecret,
+            userId: user.uid,
+            folderId,
+            vaultItemId: nextVaultItemId,
+            createdAt: serverTimestamp(),
+          });
+        }
+
         await batch.commit();
-        toast.success('Vault item saved.');
+        toast.success(shouldCreateAuthenticator ? 'Account and authenticator key saved.' : 'Account credentials saved.');
+      } else {
+        await addDoc(collection(db, 'accounts'), {
+          id: createId(),
+          issuer: authenticatorIssuer,
+          name: authenticatorName,
+          secret: authenticatorSecret,
+          userId: user.uid,
+          folderId,
+          vaultItemId: null,
+          createdAt: serverTimestamp(),
+        });
+        toast.success('Authenticator key created.');
       }
 
       resetVaultDialog();
     } catch (error) {
-      console.error('Vault save failed', handleFirestoreError(error, editingVaultItem ? OperationType.UPDATE : OperationType.CREATE, 'passwords'));
+      console.error('Account save failed', handleFirestoreError(error, editingVaultItem ? OperationType.UPDATE : OperationType.CREATE, shouldSaveCredentials ? 'passwords' : 'accounts'));
       toast.error(getFirestoreActionErrorMessage(error));
     }
   };
@@ -1126,7 +1113,7 @@ function AppContent() {
       }
 
       await batch.commit();
-      toast.success('Vault item removed.');
+      toast.success('Account removed.');
     } catch (error) {
       console.error('Vault delete failed', handleFirestoreError(error, OperationType.DELETE, 'passwords'));
       toast.error(getFirestoreActionErrorMessage(error));
@@ -1156,7 +1143,7 @@ function AppContent() {
     setScanningQrFile(false);
   };
 
-  const applyDecodedAuthenticatorValue = (decodedText: string) => {
+  const applyDecodedAuthenticatorValue = (decodedText: string, target: 'authenticator' | 'vault' = 'authenticator') => {
     try {
       const parsed = parseOtpauthPayload(decodedText);
 
@@ -1165,12 +1152,29 @@ function AppContent() {
         return;
       }
 
-      setAuthenticatorForm((current) => ({
-        issuer: parsed.issuer && parsed.issuer !== 'Authenticator' ? parsed.issuer : current.issuer,
-        accountName: parsed.accountName || current.accountName,
-        secret: parsed.secret,
-      }));
-      setAuthenticatorMethod('secret');
+      if (target === 'vault') {
+        setVaultForm((current) => {
+          const parsedIssuer = parsed.issuer && parsed.issuer !== 'Authenticator' ? parsed.issuer : '';
+          const parsedAccountName = parsed.accountName || '';
+
+          return {
+            ...current,
+            platform: current.entryType === 'both' ? current.platform || parsedIssuer : current.platform,
+            username: current.entryType === 'both' ? current.username || parsedAccountName : current.username,
+            totpIssuer: parsedIssuer || current.totpIssuer,
+            totpUsername: parsedAccountName || current.totpUsername,
+            totpSecret: parsed.secret,
+          };
+        });
+      } else {
+        setAuthenticatorForm((current) => ({
+          issuer: parsed.issuer && parsed.issuer !== 'Authenticator' ? parsed.issuer : current.issuer,
+          accountName: parsed.accountName || current.accountName,
+          secret: parsed.secret,
+        }));
+        setAuthenticatorMethod('secret');
+      }
+
       toast.success('Authenticator details captured from QR code.');
     } catch (error) {
       console.error(error);
@@ -1178,7 +1182,7 @@ function AppContent() {
     }
   };
 
-  const handleQrFileUpload = async (file?: File | null) => {
+  const handleQrFileUpload = async (file?: File | null, target: 'authenticator' | 'vault' = 'authenticator') => {
     if (!file) {
       return;
     }
@@ -1202,7 +1206,7 @@ function AppContent() {
       if (readerElement) {
         readerElement.innerHTML = '';
       }
-      applyDecodedAuthenticatorValue(decodedText);
+      applyDecodedAuthenticatorValue(decodedText, target);
     } catch (error) {
       console.error(error);
       toast.error('Unable to decode that QR image.');
@@ -1253,7 +1257,7 @@ function AppContent() {
           vaultItemId: authenticatorTarget.password?.id || null,
           createdAt: serverTimestamp(),
         });
-        toast.success('Authenticator added to the vault item.');
+        toast.success('Authenticator added to the account.');
       }
 
       resetAuthenticatorDialog();
@@ -1497,7 +1501,7 @@ function AppContent() {
         return;
       }
 
-      toast.success(`Imported ${importedPasswords} vault items, ${importedAccounts} authenticators, and ${importedFolders} folders.`);
+      toast.success(`Imported ${importedPasswords} accounts, ${importedAccounts} authenticators, and ${importedFolders} folders.`);
     } catch (error) {
       console.error(error);
       toast.error(error instanceof Error ? error.message : 'Import failed. Check the JSON format.');
@@ -1599,43 +1603,12 @@ function AppContent() {
     }
   };
 
-  const lockVault = () => {
-    setIsVaultLocked(true);
-    setLastLockedAt(new Date());
-    setMobileSidebarOpen(false);
-    toast.success('Vault locked for this session.');
-  };
-
-  const unlockVault = () => {
-    setIsVaultLocked(false);
-  };
-
-  const handleUseGeneratedPassword = () => {
-    openCreateVaultDialog({
-      password: generatedPassword,
-      platform: vaultForm.platform,
-      accountName: vaultForm.accountName,
-      username: vaultForm.username,
-      loginUrl: vaultForm.loginUrl,
-      remarks: vaultForm.remarks,
-    });
-  };
-
   const renderPageAction = () => {
-    if (activePage === 'home' || activePage === 'vault') {
+    if (activePage === 'vault') {
       return (
         <Button className="rounded-2xl px-4" onClick={() => openCreateVaultDialog()}>
           <Plus className="mr-2 h-4 w-4" />
-          New Vault Item
-        </Button>
-      );
-    }
-
-    if (activePage === 'generator') {
-      return (
-        <Button className="rounded-2xl px-4" onClick={handleUseGeneratedPassword}>
-          <ChevronRight className="mr-2 h-4 w-4" />
-          Use In Vault
+          Add New Account
         </Button>
       );
     }
@@ -1810,7 +1783,6 @@ function AppContent() {
         onCloseMobile={() => setMobileSidebarOpen(false)}
         onOpenSettings={() => navigateToPage('settings')}
         onOpenHelp={() => navigateToPage('help')}
-        onLockVault={lockVault}
         user={user}
       />
 
@@ -1850,12 +1822,14 @@ function AppContent() {
         </header>
 
         <main className="relative mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
-          <PageIntro
-            icon={activeConfig.icon}
-            title={activeConfig.title}
-            description={activeConfig.description}
-            breadcrumb={activeConfig.label}
-          />
+          {activePage !== 'vault' && (
+            <PageIntro
+              icon={activeConfig.icon}
+              title={activeConfig.title}
+              description={activeConfig.description}
+              breadcrumb={activeConfig.label}
+            />
+          )}
 
           <AnimatePresence mode="wait">
             <motion.div
@@ -1865,116 +1839,6 @@ function AppContent() {
               exit={{ opacity: 0, y: -10 }}
               transition={{ duration: 0.2 }}
             >
-              {activePage === 'home' && (
-                <div className="space-y-6">
-                  <HomeHero
-                    totalPasswords={vaultItems.length}
-                    authenticatorEnabledCount={authenticatorEnabledCount}
-                    onOpenVault={() => navigateToPage('vault')}
-                    onOpenGenerator={() => navigateToPage('generator')}
-                  />
-
-                  <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-                    <MetricCard
-                      title="Total Passwords"
-                      value={vaultItems.length.toString()}
-                      description="Saved vault items"
-                      icon={KeyRound}
-                    />
-                    <MetricCard
-                      title="Weak Passwords"
-                      value={weakPasswordCount.toString()}
-                      description="Need attention"
-                      tone={weakPasswordCount > 0 ? 'warning' : 'neutral'}
-                      icon={ShieldAlert}
-                    />
-                    <MetricCard
-                      title="Vault Health"
-                      value={`${vaultHealth}%`}
-                      description="Strength + 2FA coverage"
-                      tone={vaultHealth >= 80 ? 'success' : vaultHealth >= 55 ? 'neutral' : 'warning'}
-                      icon={ShieldCheck}
-                    />
-                    <MetricCard
-                      title="Authenticator Enabled"
-                      value={authenticatorEnabledCount.toString()}
-                      description="Vault items with 2FA"
-                      tone={authenticatorEnabledCount > 0 ? 'success' : 'neutral'}
-                      icon={BadgeCheck}
-                    />
-                  </div>
-
-                  <div className="grid gap-6 xl:grid-cols-[1.1fr_0.9fr]">
-                    <Card className="rounded-[2rem] border border-border/70 bg-background/75 p-6 shadow-xl backdrop-blur-xl">
-                      <div className="flex items-center justify-between gap-4">
-                        <div>
-                          <h2 className="text-lg font-semibold">Recently Added Vault Items</h2>
-                          <p className="text-sm text-muted-foreground">Your newest credentials appear here first.</p>
-                        </div>
-                        <Button variant="outline" className="rounded-2xl" onClick={() => navigateToPage('vault')}>
-                          Open Vault
-                        </Button>
-                      </div>
-
-                      <div className="mt-5 space-y-3">
-                        {recentItems.length === 0 ? (
-                          <PageEmptyState
-                            title="Your vault is empty"
-                            description="Create a vault item to populate the dashboard."
-                            actionLabel="Add Vault Item"
-                            onAction={() => openCreateVaultDialog()}
-                          />
-                        ) : (
-                          recentItems.map((item) => (
-                            <div key={item.password.id} className="flex items-center justify-between gap-4 rounded-2xl border border-border/60 bg-background/45 px-4 py-4">
-                              <div className="flex min-w-0 items-center gap-3">
-                                <PlatformBadge
-                                  label={item.account?.issuer || item.password.title}
-                                  hint={`${item.password.title} ${item.password.url || ''}`}
-                                />
-                                <div className="min-w-0">
-                                  <p className="truncate font-medium">{item.password.title}</p>
-                                  <p className="truncate text-sm text-muted-foreground">
-                                    {item.password.accountName || item.password.username}
-                                  </p>
-                                </div>
-                              </div>
-                              <div className="shrink-0 text-right">
-                                <p className="text-sm font-medium">{item.account ? '2FA enabled' : 'Password only'}</p>
-                                <p className="text-xs text-muted-foreground">{formatDate(item.password.createdAt)}</p>
-                              </div>
-                            </div>
-                          ))
-                        )}
-                      </div>
-                    </Card>
-
-                    <Card className="rounded-[2rem] border border-border/70 bg-background/75 p-6 shadow-xl backdrop-blur-xl">
-                      <div className="flex items-center gap-3">
-                        <div className="rounded-2xl bg-primary/10 p-3 text-primary">
-                          <Sparkles className="h-5 w-5" />
-                        </div>
-                        <div>
-                          <h2 className="text-lg font-semibold">Security Suggestions</h2>
-                          <p className="text-sm text-muted-foreground">A short list of the next improvements worth making.</p>
-                        </div>
-                      </div>
-
-                      <div className="mt-5 space-y-3">
-                        {securitySuggestions.map((suggestion) => (
-                          <div key={suggestion} className="flex gap-3 rounded-2xl border border-border/60 bg-background/45 px-4 py-4">
-                            <div className="mt-0.5 rounded-full bg-primary/10 p-1 text-primary">
-                              <ChevronRight className="h-3.5 w-3.5" />
-                            </div>
-                            <p className="text-sm leading-6 text-muted-foreground">{suggestion}</p>
-                          </div>
-                        ))}
-                      </div>
-                    </Card>
-                  </div>
-                </div>
-              )}
-
               {activePage === 'vault' && (
                 <div className="space-y-6">
                   <Card className="rounded-[2rem] border border-border/70 bg-background/75 p-5 shadow-xl backdrop-blur-xl">
@@ -2010,27 +1874,21 @@ function AppContent() {
                         </Button>
                         <Button className="rounded-2xl" onClick={() => openCreateVaultDialog()}>
                           <Plus className="mr-2 h-4 w-4" />
-                          Add Vault Item
+                          Add New Account
                         </Button>
                       </div>
-                    </div>
-
-                    <div className="mt-4 flex flex-wrap gap-3 text-sm text-muted-foreground">
-                      <InfoChip label={`${filteredVaultItems.length} vault item${filteredVaultItems.length === 1 ? '' : 's'}`} icon={KeyRound} />
-                      <InfoChip label={`${authenticatorEnabledCount} with authenticator`} icon={BadgeCheck} />
-                      <InfoChip label={`${weakPasswordCount} weak password${weakPasswordCount === 1 ? '' : 's'}`} icon={ShieldAlert} />
                     </div>
                   </Card>
 
                   {filteredVaultItems.length === 0 && orphanAccounts.length === 0 ? (
                     <PageEmptyState
-                      title={vaultItems.length ? 'No vault items match this filter' : 'No vault items yet'}
+                      title={vaultItems.length ? 'No accounts match this filter' : 'No accounts yet'}
                       description={
                         vaultItems.length
                           ? 'Adjust your search or folder filter to see more entries.'
-                          : 'Create a vault item to store credentials and attach an authenticator.'
+                          : 'Add a new account to store credentials, create an authenticator key, or save both together.'
                       }
-                      actionLabel={vaultItems.length ? 'Clear Filters' : 'Add Vault Item'}
+                      actionLabel={vaultItems.length ? 'Clear Filters' : 'Add New Account'}
                       onAction={() => {
                         if (vaultItems.length) {
                           setVaultSearch('');
@@ -2094,7 +1952,6 @@ function AppContent() {
                                   openCreateVaultDialog(
                                     {
                                       platform: account.issuer,
-                                      accountName: account.name,
                                       username: account.name,
                                     },
                                     account,
@@ -2109,132 +1966,6 @@ function AppContent() {
                       )}
                     </div>
                   )}
-                </div>
-              )}
-
-              {activePage === 'generator' && (
-                <div className="grid gap-6 xl:grid-cols-[0.9fr_1.1fr]">
-                  <Card className="rounded-[2rem] border border-border/70 bg-background/75 p-6 shadow-xl backdrop-blur-xl">
-                    <div className="space-y-5">
-                      <div>
-                        <h2 className="text-lg font-semibold">Generator Controls</h2>
-                        <p className="text-sm text-muted-foreground">Tune the generated password before you send it into Vault.</p>
-                      </div>
-
-                      <div className="space-y-3">
-                        <div className="flex items-center justify-between">
-                          <Label>Password Length</Label>
-                          <span className="text-sm text-muted-foreground">{generatorOptions.length} characters</span>
-                        </div>
-                        <input
-                          type="range"
-                          min="8"
-                          max="40"
-                          step="1"
-                          value={generatorOptions.length}
-                          onChange={(event) =>
-                            setGeneratorOptions((current) => ({
-                              ...current,
-                              length: Number(event.target.value),
-                            }))
-                          }
-                          className="w-full"
-                        />
-                      </div>
-
-                      <div className="grid gap-3 sm:grid-cols-2">
-                        <GeneratorToggle
-                          label="Uppercase"
-                          checked={generatorOptions.includeUppercase}
-                          onCheckedChange={(checked) =>
-                            setGeneratorOptions((current) => ({ ...current, includeUppercase: checked }))
-                          }
-                        />
-                        <GeneratorToggle
-                          label="Lowercase"
-                          checked={generatorOptions.includeLowercase}
-                          onCheckedChange={(checked) =>
-                            setGeneratorOptions((current) => ({ ...current, includeLowercase: checked }))
-                          }
-                        />
-                        <GeneratorToggle
-                          label="Numbers"
-                          checked={generatorOptions.includeNumbers}
-                          onCheckedChange={(checked) =>
-                            setGeneratorOptions((current) => ({ ...current, includeNumbers: checked }))
-                          }
-                        />
-                        <GeneratorToggle
-                          label="Symbols"
-                          checked={generatorOptions.includeSymbols}
-                          onCheckedChange={(checked) =>
-                            setGeneratorOptions((current) => ({ ...current, includeSymbols: checked }))
-                          }
-                        />
-                        <GeneratorToggle
-                          label="Exclude Similar Characters"
-                          checked={generatorOptions.excludeSimilar}
-                          onCheckedChange={(checked) =>
-                            setGeneratorOptions((current) => ({ ...current, excludeSimilar: checked }))
-                          }
-                        />
-                      </div>
-
-                      <Button variant="outline" className="rounded-2xl" onClick={() => setGeneratedPassword(generatePasswordValue(generatorOptions))}>
-                        <RefreshCcw className="mr-2 h-4 w-4" />
-                        Regenerate
-                      </Button>
-                    </div>
-                  </Card>
-
-                  <div className="space-y-6">
-                    <Card className="rounded-[2rem] border border-border/70 bg-background/75 p-6 shadow-xl backdrop-blur-xl">
-                      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-                        <div>
-                          <p className="text-sm font-semibold uppercase tracking-[0.22em] text-primary">Generated Password</p>
-                          <h2 className="mt-2 text-lg font-semibold">Ready for a new vault item</h2>
-                        </div>
-                        <PasswordStrengthBadge strength={generatedPasswordStrength} />
-                      </div>
-
-                      <div className="mt-5 rounded-[1.6rem] border border-border/60 bg-background/40 p-5">
-                        <p className="break-all font-mono text-lg leading-8 text-foreground">{generatedPassword || 'Enable at least one character set.'}</p>
-                      </div>
-
-                      <div className="mt-4">
-                        <StrengthMeter strength={generatedPasswordStrength} />
-                      </div>
-
-                      <div className="mt-5 flex flex-wrap gap-3">
-                        <Button className="rounded-2xl" onClick={() => void copyToClipboard(generatedPassword, 'Generated password copied.')}>
-                          <Copy className="mr-2 h-4 w-4" />
-                          Copy Password
-                        </Button>
-                        <Button variant="outline" className="rounded-2xl" onClick={handleUseGeneratedPassword}>
-                          <ChevronRight className="mr-2 h-4 w-4" />
-                          Create Vault Item
-                        </Button>
-                      </div>
-                    </Card>
-
-                    <Card className="rounded-[2rem] border border-border/70 bg-background/75 p-6 shadow-xl backdrop-blur-xl">
-                      <div className="flex items-center gap-3">
-                        <div className="rounded-2xl bg-primary/10 p-3 text-primary">
-                          <Shield className="h-5 w-5" />
-                        </div>
-                        <div>
-                          <h2 className="text-lg font-semibold">Generator Guidance</h2>
-                          <p className="text-sm text-muted-foreground">A few rules worth keeping even after the password lands in Vault.</p>
-                        </div>
-                      </div>
-
-                      <div className="mt-5 space-y-3">
-                        <GeneratorTip>Prefer 16+ characters for high-value accounts and admin credentials.</GeneratorTip>
-                        <GeneratorTip>Attach an authenticator immediately after saving a critical vault item.</GeneratorTip>
-                        <GeneratorTip>Avoid reusing old passwords even if they already score well.</GeneratorTip>
-                      </div>
-                    </Card>
-                  </div>
                 </div>
               )}
 
@@ -2361,7 +2092,7 @@ function AppContent() {
                           <div className="flex items-center justify-between gap-4">
                             <div>
                               <h2 className="text-lg font-semibold">Folders</h2>
-                              <p className="text-sm text-muted-foreground">Organize vault items by workspace, team, or account type.</p>
+                              <p className="text-sm text-muted-foreground">Organize accounts by workspace, team, or account type.</p>
                             </div>
                             <Button className="rounded-2xl" onClick={() => setFolderDialogOpen(true)}>
                               <FolderPlus className="mr-2 h-4 w-4" />
@@ -2378,7 +2109,7 @@ function AppContent() {
                                   <div>
                                     <p className="font-medium">{folder.name}</p>
                                     <p className="text-sm text-muted-foreground">
-                                      {vaultItems.filter((item) => item.password.folderId === folder.id).length} vault item(s)
+                                      {vaultItems.filter((item) => item.password.folderId === folder.id).length} account(s)
                                     </p>
                                   </div>
                                   <Button variant="outline" className="rounded-2xl border-destructive/40 text-destructive hover:bg-destructive/10" onClick={() => void handleDeleteFolder(folder)}>
@@ -2394,8 +2125,8 @@ function AppContent() {
                         <Card className="rounded-[2rem] border border-border/70 bg-background/75 p-6 shadow-xl backdrop-blur-xl">
                           <div className="space-y-5">
                             <div>
-                              <h2 className="text-lg font-semibold">Backups and Vault Locking</h2>
-                              <p className="text-sm text-muted-foreground">Export your current vault, import previous backups, or lock the active session.</p>
+                              <h2 className="text-lg font-semibold">Backups</h2>
+                              <p className="text-sm text-muted-foreground">Export your current vault or import a previous backup.</p>
                             </div>
 
                             <div className="flex flex-wrap gap-3">
@@ -2407,14 +2138,6 @@ function AppContent() {
                                 <Upload className="mr-2 h-4 w-4" />
                                 Import Backup
                               </Button>
-                              <Button className="rounded-2xl" onClick={lockVault}>
-                                <Lock className="mr-2 h-4 w-4" />
-                                Lock Vault
-                              </Button>
-                            </div>
-
-                            <div className="rounded-[1.6rem] border border-border/60 bg-background/40 p-4 text-sm text-muted-foreground">
-                              Lock Vault currently uses a session lock placeholder overlay. TODO: replace it with local re-auth or device-bound unlock without signing the user out.
                             </div>
                           </div>
                         </Card>
@@ -2455,7 +2178,7 @@ function AppContent() {
                   <HelpCard
                     icon={Info}
                     title="Getting Started"
-                    description="Create a vault item from Home or Vault, add a strong password, then attach an authenticator if the account supports 2FA."
+                    description="Use Add New Account from Vault, then save credentials, create an authenticator key, or link both to the same account."
                     actionLabel="Open Vault"
                     onAction={() => navigateToPage('vault')}
                   />
@@ -2469,7 +2192,7 @@ function AppContent() {
                   <HelpCard
                     icon={QrCode}
                     title="Authenticator Setup"
-                    description="Open any vault item and choose Add Authenticator. You can paste a secret key, scan from the camera, or upload a QR image."
+                    description="Open any saved account and choose Add Authenticator. You can paste a secret key, scan from the camera, or upload a QR image."
                     actionLabel="Review Vault"
                     onAction={() => navigateToPage('vault')}
                   />
@@ -2493,90 +2216,222 @@ function AppContent() {
       <Dialog open={vaultDialogOpen} onOpenChange={(open) => (open ? setVaultDialogOpen(true) : resetVaultDialog())}>
         <DialogContent className="max-h-[90vh] overflow-y-auto rounded-[2rem] border border-border/70 bg-background/95 p-0 shadow-2xl backdrop-blur-2xl sm:max-w-2xl">
           <DialogHeader className="border-b border-border/70 px-6 py-6">
-            <DialogTitle className="text-xl">{editingVaultItem ? 'Edit Vault Item' : 'Add Vault Item'}</DialogTitle>
+            <DialogTitle className="text-xl">{editingVaultItem ? 'Edit Account' : 'Add New Account'}</DialogTitle>
             <DialogDescription>
-              Save the credential details first. You can attach an authenticator to the same vault item right after it appears in the list.
+              Choose whether this account needs saved credentials, an authenticator key, or both linked together.
             </DialogDescription>
           </DialogHeader>
 
-          <div className="grid gap-5 px-6 py-6">
-            <div className="grid gap-5 sm:grid-cols-2">
-              <div className="space-y-2">
-                <Label>Platform</Label>
-                <Input
-                  value={vaultForm.platform}
-                  onChange={(event) => setVaultForm((current) => ({ ...current, platform: event.target.value }))}
-                  placeholder="Google, GitHub, Banking"
-                  className="h-12 rounded-2xl px-4"
-                />
+          <div className="space-y-6 px-6 py-6">
+            {!editingVaultItem && !pendingLinkAccountId && (
+              <div className="space-y-3">
+                <Label>What do you want to save?</Label>
+                <div className="grid gap-2 sm:grid-cols-3">
+                  {[
+                    { value: 'credentials', label: 'Save Credentials' },
+                    { value: 'authenticator', label: 'Create Authenticator Key' },
+                    { value: 'both', label: 'Both Same Account' },
+                  ].map((option) => (
+                    <Button
+                      key={option.value}
+                      variant={vaultForm.entryType === option.value ? 'default' : 'outline'}
+                      className="h-auto min-h-12 rounded-2xl whitespace-normal"
+                      onClick={() => setVaultForm((current) => ({ ...current, entryType: option.value as VaultEntryType }))}
+                    >
+                      {option.label}
+                    </Button>
+                  ))}
+                </div>
               </div>
-              <div className="space-y-2">
-                <Label>Account Name</Label>
-                <Input
-                  value={vaultForm.accountName}
-                  onChange={(event) => setVaultForm((current) => ({ ...current, accountName: event.target.value }))}
-                  placeholder="Work Admin, Personal Profile"
-                  className="h-12 rounded-2xl px-4"
-                />
-              </div>
-              <div className="space-y-2">
-                <Label>Email / Username</Label>
-                <Input
-                  value={vaultForm.username}
-                  onChange={(event) => setVaultForm((current) => ({ ...current, username: event.target.value }))}
-                  placeholder="you@example.com"
-                  className="h-12 rounded-2xl px-4"
-                />
-              </div>
-              <div className="space-y-2">
-                <div className="flex items-center justify-between">
+            )}
+
+            {(editingVaultItem || pendingLinkAccountId || vaultForm.entryType !== 'authenticator') && (
+              <div className="grid gap-5 sm:grid-cols-2">
+                <div className="space-y-2">
+                  <Label>Platform</Label>
+                  <Input
+                    value={vaultForm.platform}
+                    onChange={(event) => setVaultForm((current) => ({ ...current, platform: event.target.value }))}
+                    placeholder="Google, GitHub, Banking"
+                    className="h-12 rounded-2xl px-4"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label>Email / Username</Label>
+                  <Input
+                    value={vaultForm.username}
+                    onChange={(event) => setVaultForm((current) => ({ ...current, username: event.target.value }))}
+                    placeholder="you@example.com"
+                    className="h-12 rounded-2xl px-4"
+                  />
+                </div>
+                <div className="space-y-2">
                   <Label>Password</Label>
-                  <Button variant="ghost" size="sm" className="rounded-xl" onClick={() => navigateToPage('generator')}>
-                    Open Generator
+                  <Input
+                    type="password"
+                    value={vaultForm.password}
+                    onChange={(event) => setVaultForm((current) => ({ ...current, password: event.target.value }))}
+                    placeholder="Store the account password"
+                    className="h-12 rounded-2xl px-4"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label>Login URL (Optional)</Label>
+                  <Input
+                    value={vaultForm.loginUrl}
+                    onChange={(event) => setVaultForm((current) => ({ ...current, loginUrl: event.target.value }))}
+                    placeholder="https://example.com/login"
+                    className="h-12 rounded-2xl px-4"
+                  />
+                </div>
+                <div className="space-y-2 sm:col-span-2">
+                  <Label>Folder Selection</Label>
+                  <div className="grid gap-3 sm:grid-cols-[1fr_auto]">
+                    <select
+                      value={vaultForm.folderId}
+                      onChange={(event) => setVaultForm((current) => ({ ...current, folderId: event.target.value }))}
+                      className="h-12 w-full rounded-2xl border border-border bg-background px-4 text-sm outline-none"
+                    >
+                      <option value="">No folder</option>
+                      {folders.map((folder) => (
+                        <option key={folder.id} value={folder.id}>
+                          {folder.name}
+                        </option>
+                      ))}
+                    </select>
+                    <Button variant="outline" className="h-12 rounded-2xl" onClick={() => setFolderDialogOpen(true)}>
+                      <FolderPlus className="mr-2 h-4 w-4" />
+                      Create New Folder
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {!editingVaultItem && !pendingLinkAccountId && vaultForm.entryType === 'authenticator' && (
+              <div className="grid gap-5 sm:grid-cols-2">
+                <div className="space-y-2">
+                  <Label>Issuer Name</Label>
+                  <Input
+                    value={vaultForm.totpIssuer}
+                    onChange={(event) => setVaultForm((current) => ({ ...current, totpIssuer: event.target.value }))}
+                    placeholder="Google, GitHub, Banking"
+                    className="h-12 rounded-2xl px-4"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label>Username/Email</Label>
+                  <Input
+                    value={vaultForm.totpUsername}
+                    onChange={(event) => setVaultForm((current) => ({ ...current, totpUsername: event.target.value }))}
+                    placeholder="you@example.com"
+                    className="h-12 rounded-2xl px-4"
+                  />
+                </div>
+                <div className="space-y-2 sm:col-span-2">
+                  <Label>Folder Selection</Label>
+                  <div className="grid gap-3 sm:grid-cols-[1fr_auto]">
+                    <select
+                      value={vaultForm.folderId}
+                      onChange={(event) => setVaultForm((current) => ({ ...current, folderId: event.target.value }))}
+                      className="h-12 w-full rounded-2xl border border-border bg-background px-4 text-sm outline-none"
+                    >
+                      <option value="">No folder</option>
+                      {folders.map((folder) => (
+                        <option key={folder.id} value={folder.id}>
+                          {folder.name}
+                        </option>
+                      ))}
+                    </select>
+                    <Button variant="outline" className="h-12 rounded-2xl" onClick={() => setFolderDialogOpen(true)}>
+                      <FolderPlus className="mr-2 h-4 w-4" />
+                      Create New Folder
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {!editingVaultItem && !pendingLinkAccountId && (vaultForm.entryType === 'authenticator' || vaultForm.entryType === 'both') && (
+              <div className="space-y-5 rounded-[1.6rem] border border-border/70 bg-background/40 p-4">
+                <div>
+                  <h3 className="font-medium">Authenticator Key</h3>
+                  <p className="mt-1 text-sm text-muted-foreground">
+                    {vaultForm.entryType === 'both'
+                      ? 'Use the same platform and username above, then add the TOTP key by QR or Secret Key.'
+                      : 'Create the TOTP key by scanning a QR code or entering the Secret Key manually.'}
+                  </p>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2 rounded-2xl bg-muted/70 p-1">
+                  <Button
+                    variant={vaultForm.totpMethod === 'scan' ? 'default' : 'ghost'}
+                    className="h-11 rounded-xl"
+                    onClick={() => setVaultForm((current) => ({ ...current, totpMethod: 'scan' }))}
+                  >
+                    Scan QR
+                  </Button>
+                  <Button
+                    variant={vaultForm.totpMethod === 'secret' ? 'default' : 'ghost'}
+                    className="h-11 rounded-xl"
+                    onClick={() => setVaultForm((current) => ({ ...current, totpMethod: 'secret' }))}
+                  >
+                    Enter Manually
                   </Button>
                 </div>
-                <Input
-                  type="password"
-                  value={vaultForm.password}
-                  onChange={(event) => setVaultForm((current) => ({ ...current, password: event.target.value }))}
-                  placeholder="Store the account password"
-                  className="h-12 rounded-2xl px-4"
-                />
+
+                {vaultForm.totpMethod === 'secret' ? (
+                  <div className="space-y-2">
+                    <Label>Secret Key</Label>
+                    <Input
+                      value={vaultForm.totpSecret}
+                      onChange={(event) => setVaultForm((current) => ({ ...current, totpSecret: event.target.value }))}
+                      placeholder="Paste the Base32 secret key"
+                      className="h-12 rounded-2xl px-4 font-mono"
+                    />
+                  </div>
+                ) : (
+                  <div className="grid gap-6 lg:grid-cols-[1fr_280px]">
+                    <div className="space-y-3">
+                      <div className="rounded-[1.6rem] border border-border/70 bg-background/40 p-4">
+                        <p className="mb-3 text-sm font-medium">Live camera scan</p>
+                        <QRScanner
+                          onScanSuccess={(decodedText) => {
+                            applyDecodedAuthenticatorValue(decodedText, 'vault');
+                          }}
+                        />
+                      </div>
+                    </div>
+
+                    <div className="space-y-3">
+                      <div className="rounded-[1.6rem] border border-border/70 bg-background/40 p-4">
+                        <p className="text-sm font-medium">Upload QR Image</p>
+                        <p className="mt-2 text-sm text-muted-foreground">Use a screenshot or exported QR image if camera scanning is not practical.</p>
+                        <label className="mt-4 flex cursor-pointer items-center justify-center rounded-2xl border border-dashed border-border px-4 py-4 text-sm transition-colors hover:bg-background/60">
+                          <ScanLine className="mr-2 h-4 w-4" />
+                          {scanningQrFile ? 'Reading image...' : 'Choose Image'}
+                          <input
+                            type="file"
+                            accept="image/*"
+                            className="hidden"
+                            onChange={(event) => {
+                              void handleQrFileUpload(event.target.files?.[0], 'vault');
+                              event.target.value = '';
+                            }}
+                          />
+                        </label>
+                      </div>
+                      {vaultForm.totpSecret && (
+                        <div className="rounded-[1.4rem] border border-emerald-500/30 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-600 dark:text-emerald-400">
+                          QR code captured. You can save this account now.
+                        </div>
+                      )}
+                      <div id="authenticator-file-reader" className="hidden" />
+                    </div>
+                  </div>
+                )}
               </div>
-              <div className="space-y-2 sm:col-span-2">
-                <Label>Login URL</Label>
-                <Input
-                  value={vaultForm.loginUrl}
-                  onChange={(event) => setVaultForm((current) => ({ ...current, loginUrl: event.target.value }))}
-                  placeholder="https://example.com/login"
-                  className="h-12 rounded-2xl px-4"
-                />
-              </div>
-              <div className="space-y-2 sm:col-span-2">
-                <Label>Folder Selection</Label>
-                <select
-                  value={vaultForm.folderId}
-                  onChange={(event) => setVaultForm((current) => ({ ...current, folderId: event.target.value }))}
-                  className="h-12 w-full rounded-2xl border border-border px-4 text-sm outline-none"
-                >
-                  <option value="">No folder</option>
-                  {folders.map((folder) => (
-                    <option key={folder.id} value={folder.id}>
-                      {folder.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div className="space-y-2 sm:col-span-2">
-                <Label>Additional Remarks</Label>
-                <textarea
-                  value={vaultForm.remarks}
-                  onChange={(event) => setVaultForm((current) => ({ ...current, remarks: event.target.value }))}
-                  placeholder="Optional context, recovery notes, or login instructions"
-                  className="min-h-28 w-full rounded-[1.4rem] border border-border bg-transparent px-4 py-3 text-sm outline-none"
-                />
-              </div>
-            </div>
+            )}
           </div>
 
           <DialogFooter className="border-t border-border/70 bg-background/60 px-6 py-4">
@@ -2584,7 +2439,7 @@ function AppContent() {
               Cancel
             </Button>
             <Button className="rounded-2xl" onClick={() => void handleSaveVaultItem()}>
-              {editingVaultItem ? 'Save Changes' : 'Save Vault Item'}
+              {editingVaultItem ? 'Save Changes' : vaultForm.entryType === 'authenticator' ? 'Create Authenticator Key' : 'Save Account'}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -2601,7 +2456,7 @@ function AppContent() {
                 : 'Edit Standalone Authenticator'}
             </DialogTitle>
             <DialogDescription>
-              Attach a secret key directly to this vault item, or scan a QR code to capture the authenticator details.
+              Attach a secret key directly to this account, or scan a QR code to capture the authenticator details.
             </DialogDescription>
           </DialogHeader>
 
@@ -2691,7 +2546,7 @@ function AppContent() {
 
             {!authenticatorTarget?.password && (
               <div className="rounded-[1.6rem] border border-border/70 bg-background/40 p-4 text-sm text-muted-foreground">
-                This authenticator is currently standalone. Create a vault item from the Vault page if you want to link it to saved credentials.
+                This authenticator is currently standalone. Add credentials from the Vault page if you want to link it to a saved account.
               </div>
             )}
           </div>
@@ -2777,7 +2632,7 @@ function AppContent() {
               </div>
 
               <div className="flex justify-center rounded-[1.8rem] border border-border/70 bg-white p-5">
-                <QRCodeSVG value={buildOtpauthUri({ issuer: qrPreviewAccount.issuer, accountName: qrPreviewAccount.name || 'Vault Item', secret: qrPreviewAccount.secret })} size={220} />
+                <QRCodeSVG value={buildOtpauthUri({ issuer: qrPreviewAccount.issuer, accountName: qrPreviewAccount.name || 'Account', secret: qrPreviewAccount.secret })} size={220} />
               </div>
             </div>
           )}
@@ -2808,44 +2663,6 @@ function AppContent() {
         </DialogContent>
       </Dialog>
 
-      {/* TODO: Replace this placeholder unlock overlay with a real local re-auth flow that keeps the vault locked without signing the user out. */}
-      <AnimatePresence>
-        {isVaultLocked && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 px-6 backdrop-blur-xl"
-          >
-            <Card className="w-full max-w-lg rounded-[2rem] border border-border/70 bg-background/90 p-6 shadow-2xl">
-              <div className="space-y-6">
-                <div className="flex items-start gap-4">
-                  <div className="rounded-[1.4rem] bg-primary/10 p-4 text-primary">
-                    <Lock className="h-6 w-6" />
-                  </div>
-                  <div>
-                    <h2 className="text-xl font-semibold">Vault locked</h2>
-                    <p className="mt-2 text-sm leading-6 text-muted-foreground">
-                      {APP_NAME} is hidden behind a session lock placeholder. Unlock to continue, or sign out to fully close the session.
-                    </p>
-                    {lastLockedAt && <p className="mt-2 text-xs text-muted-foreground">Locked at {lastLockedAt.toLocaleTimeString()}</p>}
-                  </div>
-                </div>
-
-                <div className="flex flex-wrap gap-3">
-                  <Button className="rounded-2xl" onClick={unlockVault}>
-                    Unlock Session
-                  </Button>
-                  <Button variant="outline" className="rounded-2xl" onClick={() => setSignOutDialogOpen(true)}>
-                    Sign Out Instead
-                  </Button>
-                </div>
-              </div>
-            </Card>
-          </motion.div>
-        )}
-      </AnimatePresence>
-
       <Toaster />
     </div>
   );
@@ -2858,10 +2675,9 @@ const Sidebar: React.FC<{
   onCloseMobile: () => void;
   onOpenSettings: () => void;
   onOpenHelp: () => void;
-  onLockVault: () => void;
   user: FirebaseUser;
-}> = ({ activePage, mobileOpen, onNavigate, onCloseMobile, onOpenSettings, onOpenHelp, onLockVault, user }) => {
-  const primaryPages: AppPage[] = ['home', 'vault', 'generator', 'settings'];
+}> = ({ activePage, mobileOpen, onNavigate, onCloseMobile, onOpenSettings, onOpenHelp, user }) => {
+  const primaryPages: AppPage[] = ['vault', 'settings'];
 
   return (
     <>
@@ -2881,11 +2697,6 @@ const Sidebar: React.FC<{
             <LifeBuoy className="h-5 w-5" />
             <span className="text-xs">Help</span>
           </Button>
-          <Button variant="ghost" className="h-auto w-full flex-col gap-2 rounded-2xl px-3 py-3" onClick={onLockVault}>
-            <Lock className="h-5 w-5" />
-            <span className="text-xs">Lock Vault</span>
-          </Button>
-
           <div className="rounded-2xl border border-border/70 bg-background/50 px-3 py-3 text-center">
             <UserAvatar user={user} className="mx-auto h-10 w-10" />
             <p className="mt-2 truncate text-xs font-medium">{user.displayName || 'Profile'}</p>
@@ -2934,10 +2745,6 @@ const Sidebar: React.FC<{
                 <Button variant={activePage === 'help' ? 'secondary' : 'ghost'} className="h-12 w-full justify-start rounded-2xl" onClick={onOpenHelp}>
                   <LifeBuoy className="mr-2 h-4 w-4" />
                   Help and Support
-                </Button>
-                <Button variant="ghost" className="h-12 w-full justify-start rounded-2xl" onClick={onLockVault}>
-                  <Lock className="mr-2 h-4 w-4" />
-                  Lock Vault
                 </Button>
                 <Button variant="ghost" className="h-12 w-full justify-start rounded-2xl" onClick={onOpenSettings}>
                   <Settings2 className="mr-2 h-4 w-4" />
@@ -2989,94 +2796,6 @@ const PageIntro: React.FC<{
         </div>
       </div>
     </Card>
-  );
-};
-
-const HomeHero: React.FC<{
-  totalPasswords: number;
-  authenticatorEnabledCount: number;
-  onOpenVault: () => void;
-  onOpenGenerator: () => void;
-}> = ({ totalPasswords, authenticatorEnabledCount, onOpenVault, onOpenGenerator }) => {
-  return (
-    <Card className="rounded-[2rem] border border-border/70 bg-background/75 p-6 shadow-xl backdrop-blur-xl">
-      <div className="grid gap-6 xl:grid-cols-[1fr_auto] xl:items-center">
-        <div className="space-y-4">
-          <p className="text-sm font-semibold uppercase tracking-[0.24em] text-primary">Vault Overview</p>
-          <div className="space-y-3">
-            <h2 className="text-3xl font-semibold tracking-tight">Keep every account inside one cleaner vault.</h2>
-            <p className="max-w-2xl text-sm leading-7 text-muted-foreground">
-              Auth Nest now centers the entire workflow around vault entries. Save credentials, add an authenticator to the same item, and monitor security drift from Home.
-            </p>
-          </div>
-        </div>
-
-        <div className="grid gap-3 sm:grid-cols-2 xl:w-[320px]">
-          <HeroStat title="Vault Items" value={totalPasswords.toString()} />
-          <HeroStat title="2FA Linked" value={authenticatorEnabledCount.toString()} />
-          <Button className="rounded-2xl sm:col-span-2" onClick={onOpenVault}>
-            Open Vault
-          </Button>
-          <Button variant="outline" className="rounded-2xl sm:col-span-2" onClick={onOpenGenerator}>
-            Open Password Generator
-          </Button>
-        </div>
-      </div>
-    </Card>
-  );
-};
-
-const HeroStat: React.FC<{
-  title: string;
-  value: string;
-}> = ({ title, value }) => {
-  return (
-    <div className="rounded-[1.6rem] border border-border/60 bg-background/40 px-4 py-4">
-      <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">{title}</p>
-      <p className="mt-2 text-2xl font-semibold">{value}</p>
-    </div>
-  );
-};
-
-const MetricCard: React.FC<{
-  title: string;
-  value: string;
-  description: string;
-  icon: React.ComponentType<{ className?: string }>;
-  tone?: 'neutral' | 'success' | 'warning';
-}> = ({ title, value, description, icon: Icon, tone = 'neutral' }) => {
-  const toneClasses =
-    tone === 'success'
-      ? 'bg-emerald-500/10 text-emerald-500'
-      : tone === 'warning'
-        ? 'bg-amber-500/10 text-amber-500'
-        : 'bg-primary/10 text-primary';
-
-  return (
-    <Card className="rounded-[1.8rem] border border-border/70 bg-background/75 p-5 shadow-lg backdrop-blur-xl">
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <p className="text-sm text-muted-foreground">{title}</p>
-          <p className="mt-3 text-3xl font-semibold tracking-tight">{value}</p>
-          <p className="mt-2 text-sm text-muted-foreground">{description}</p>
-        </div>
-        <div className={`rounded-2xl p-3 ${toneClasses}`}>
-          <Icon className="h-5 w-5" />
-        </div>
-      </div>
-    </Card>
-  );
-};
-
-const InfoChip: React.FC<{
-  label: string;
-  icon: React.ComponentType<{ className?: string }>;
-}> = ({ label, icon: Icon }) => {
-  return (
-    <div className="inline-flex items-center gap-2 rounded-full border border-border/70 bg-background/40 px-3 py-2">
-      <Icon className="h-3.5 w-3.5" />
-      <span>{label}</span>
-    </div>
   );
 };
 
@@ -3216,7 +2935,7 @@ const VaultItemCard: React.FC<{
           <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <p className="text-sm font-medium">Authenticator not added yet</p>
-              <p className="text-sm text-muted-foreground">Attach a TOTP secret to this same vault item using a secret key or QR code.</p>
+              <p className="text-sm text-muted-foreground">Attach a TOTP secret to this same account using a secret key or QR code.</p>
             </div>
             <Button className="rounded-2xl" onClick={onManageAuthenticator}>
               <Plus className="mr-2 h-4 w-4" />
@@ -3302,44 +3021,10 @@ const StandaloneAuthenticatorCard: React.FC<{
         </Button>
         <Button variant="outline" className="rounded-2xl" onClick={onCreateVaultItem}>
           <Plus className="mr-2 h-4 w-4" />
-          Create Vault Item
+          Add Credentials
         </Button>
       </div>
     </Card>
-  );
-};
-
-const GeneratorToggle: React.FC<{
-  label: string;
-  checked: boolean;
-  onCheckedChange: (checked: boolean) => void;
-}> = ({ label, checked, onCheckedChange }) => {
-  return (
-    <button
-      type="button"
-      onClick={() => onCheckedChange(!checked)}
-      className={`flex items-center justify-between rounded-[1.4rem] border px-4 py-3 text-left transition-colors ${
-        checked ? 'border-primary/40 bg-primary/10' : 'border-border/60 bg-background/40'
-      }`}
-    >
-      <span className="text-sm font-medium">{label}</span>
-      <span className={`flex h-6 w-6 items-center justify-center rounded-full border ${checked ? 'border-primary bg-primary text-primary-foreground' : 'border-border bg-background'}`}>
-        {checked && <Check className="h-3.5 w-3.5" />}
-      </span>
-    </button>
-  );
-};
-
-const GeneratorTip: React.FC<{
-  children: React.ReactNode;
-}> = ({ children }) => {
-  return (
-    <div className="flex gap-3 rounded-[1.4rem] border border-border/60 bg-background/40 px-4 py-4">
-      <div className="rounded-full bg-primary/10 p-1 text-primary">
-        <ChevronRight className="h-3.5 w-3.5" />
-      </div>
-      <p className="text-sm leading-6 text-muted-foreground">{children}</p>
-    </div>
   );
 };
 
@@ -3452,30 +3137,6 @@ const PasswordStrengthBadge: React.FC<{
     <span className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs font-medium ${classes} ${compact ? '' : ''}`}>
       {strength.label}
     </span>
-  );
-};
-
-const StrengthMeter: React.FC<{
-  strength: PasswordStrength;
-}> = ({ strength }) => {
-  const barClass =
-    strength.label === 'Excellent'
-      ? 'bg-emerald-500'
-      : strength.label === 'Strong'
-        ? 'bg-sky-500'
-        : strength.label === 'Fair'
-          ? 'bg-amber-500'
-          : 'bg-rose-500';
-
-  return (
-    <div className="space-y-2">
-      <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
-        <div className={`h-full rounded-full ${barClass}`} style={{ width: `${Math.max(strength.score, 8)}%` }} />
-      </div>
-      {strength.suggestions.length > 0 && (
-        <p className="text-xs text-muted-foreground">{strength.suggestions[0]}</p>
-      )}
-    </div>
   );
 };
 

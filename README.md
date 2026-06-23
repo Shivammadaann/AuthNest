@@ -4,10 +4,8 @@ Auth Nest is a vault-first password manager and authenticator app built with Rea
 
 ## Core Areas
 
-- `Home`: dashboard metrics for vault health, weak passwords, authenticator coverage, recent items, and security suggestions
-- `Vault`: combined credential manager plus authenticator attachment flow
-- `Password Generator`: strong password creation with direct handoff into Vault
-- `Settings`: account, security, folders, backups, appearance, and vault lock controls
+- `Vault`: add accounts with saved credentials, authenticator keys, or both linked together
+- `Settings`: account, security, folders, backups, and appearance controls
 - `Help and Support`: getting started and authenticator setup guidance
 
 ## Run Locally
