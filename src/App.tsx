@@ -56,6 +56,19 @@ import { buildOtpauthUri, isBase32Secret, normalizeSecret, parseOtpauthPayload }
 import { DEFAULT_GENERATOR_OPTIONS, type GeneratorOptions, generatePasswordValue, scorePasswordStrength, type PasswordStrength } from './lib/passwords';
 import { generateTOTP, getRemainingSeconds } from './lib/totp';
 import authenticatorIcon from '../icons/authenticator.svg';
+import appleIcon from '../icons/platforms/Apple Logo.png';
+import facebookIcon from '../icons/platforms/Facebook.svg';
+import googleIcon from '../icons/platforms/Google.svg';
+import icloudIcon from '../icons/platforms/iCloud Logo.png';
+import instagramIcon from '../icons/platforms/Instagram Logo.png';
+import messengerIcon from '../icons/platforms/Messenger.svg';
+import metaIcon from '../icons/platforms/Meta.svg';
+import microsoftIcon from '../icons/platforms/Microsoft.svg';
+import spotifyIcon from '../icons/platforms/Spotify Logo.png';
+import telegramIcon from '../icons/platforms/Telegram.png';
+import tiktokIcon from '../icons/platforms/Tiktok.svg';
+import whatsappIcon from '../icons/platforms/WhatsApp.svg';
+import youtubeIcon from '../icons/platforms/Youtube Logo.png';
 import {
   GoogleAuthProvider,
   createUserWithEmailAndPassword,
@@ -184,6 +197,26 @@ const INITIAL_AUTHENTICATOR_FORM: AuthenticatorFormState = {
   secret: '',
 };
 
+const SERVICE_ICONS: Array<{
+  name: string;
+  icon: string;
+  aliases: string[];
+}> = [
+  { name: 'Instagram', icon: instagramIcon, aliases: ['instagram', 'insta'] },
+  { name: 'Facebook', icon: facebookIcon, aliases: ['facebook', 'fb.com'] },
+  { name: 'Messenger', icon: messengerIcon, aliases: ['messenger'] },
+  { name: 'Meta', icon: metaIcon, aliases: ['meta', 'meta platforms', 'meta.com', 'meta business', 'meta verified'] },
+  { name: 'Google', icon: googleIcon, aliases: ['google', 'gmail', 'googlemail'] },
+  { name: 'YouTube', icon: youtubeIcon, aliases: ['youtube', 'youtu.be'] },
+  { name: 'Microsoft', icon: microsoftIcon, aliases: ['microsoft', 'office 365', 'office365', 'outlook', 'hotmail', 'live.com', 'azure', 'xbox'] },
+  { name: 'iCloud', icon: icloudIcon, aliases: ['icloud'] },
+  { name: 'Apple', icon: appleIcon, aliases: ['apple', 'appleid'] },
+  { name: 'WhatsApp', icon: whatsappIcon, aliases: ['whatsapp'] },
+  { name: 'Spotify', icon: spotifyIcon, aliases: ['spotify'] },
+  { name: 'Telegram', icon: telegramIcon, aliases: ['telegram'] },
+  { name: 'TikTok', icon: tiktokIcon, aliases: ['tiktok', 'tik tok'] },
+];
+
 const PAGE_CONFIG: Record<
   AppPage,
   {
@@ -308,6 +341,16 @@ function buildInitials(value: string) {
 
 function buildSeedHue(value: string) {
   return value.split('').reduce((total, char) => total + char.charCodeAt(0), 0) % 360;
+}
+
+function findServiceIcon(value: string) {
+  const searchableValue = value.toLowerCase();
+  return SERVICE_ICONS.find((service) =>
+    service.aliases.some((alias) => {
+      const escapedAlias = alias.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+');
+      return new RegExp(`(^|[^a-z0-9])${escapedAlias}([^a-z0-9]|$)`, 'i').test(searchableValue);
+    }),
+  );
 }
 
 function getPageTitle(user: FirebaseUser | null, page: AppPage) {
@@ -1885,7 +1928,10 @@ function AppContent() {
                           recentItems.map((item) => (
                             <div key={item.password.id} className="flex items-center justify-between gap-4 rounded-2xl border border-border/60 bg-background/45 px-4 py-4">
                               <div className="flex min-w-0 items-center gap-3">
-                                <PlatformBadge label={item.password.title} />
+                                <PlatformBadge
+                                  label={item.account?.issuer || item.password.title}
+                                  hint={`${item.password.title} ${item.password.url || ''}`}
+                                />
                                 <div className="min-w-0">
                                   <p className="truncate font-medium">{item.password.title}</p>
                                   <p className="truncate text-sm text-muted-foreground">
@@ -2723,7 +2769,7 @@ function AppContent() {
           {qrPreviewAccount && (
             <div className="space-y-5 px-6 py-6">
               <div className="flex items-center gap-3">
-                <PlatformBadge label={qrPreviewAccount.issuer} />
+                <PlatformBadge label={qrPreviewAccount.issuer} hint={qrPreviewAccount.name} />
                 <div>
                   <p className="font-medium">{qrPreviewAccount.issuer}</p>
                   <p className="text-sm text-muted-foreground">{qrPreviewAccount.name || 'Authenticator secret'}</p>
@@ -3053,7 +3099,10 @@ const VaultItemCard: React.FC<{
     <Card className="rounded-[2rem] border border-border/70 bg-background/75 p-5 shadow-xl backdrop-blur-xl">
       <div className="flex items-start justify-between gap-4">
         <div className="flex min-w-0 items-center gap-3">
-          <PlatformBadge label={item.password.title} />
+          <PlatformBadge
+            label={item.account?.issuer || item.password.title}
+            hint={`${item.password.title} ${item.password.url || ''}`}
+          />
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
               <h3 className="truncate text-lg font-semibold">{item.password.title}</h3>
@@ -3195,7 +3244,7 @@ const StandaloneAuthenticatorCard: React.FC<{
     <Card className="rounded-[1.8rem] border border-border/70 bg-background/60 p-5 shadow-lg backdrop-blur-xl">
       <div className="flex items-start justify-between gap-4">
         <div className="flex min-w-0 items-center gap-3">
-          <PlatformBadge label={account.issuer} />
+          <PlatformBadge label={account.issuer} hint={account.name} />
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
               <h3 className="truncate text-base font-semibold">{account.issuer}</h3>
@@ -3346,14 +3395,29 @@ const PageEmptyState: React.FC<{
 
 const PlatformBadge: React.FC<{
   label: string;
-}> = ({ label }) => {
+  hint?: string | null;
+}> = ({ label, hint }) => {
+  const service = findServiceIcon(`${label} ${hint || ''}`);
   const hue = buildSeedHue(label || APP_NAME);
   const background = `linear-gradient(135deg, hsla(${hue}, 78%, 56%, 0.26), hsla(${(hue + 34) % 360}, 84%, 62%, 0.42))`;
 
+  if (service) {
+    return (
+      <div
+        className="flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-[1.4rem] border border-border/70 bg-white p-2 shadow-lg"
+        title={service.name}
+        aria-label={`${service.name} service`}
+      >
+        <img src={service.icon} alt="" className="h-full w-full object-contain" />
+      </div>
+    );
+  }
+
   return (
     <div
-      className="flex h-12 w-12 items-center justify-center rounded-[1.4rem] border border-white/15 text-sm font-semibold text-white shadow-lg"
+      className="flex h-12 w-12 shrink-0 items-center justify-center rounded-[1.4rem] border border-white/15 text-sm font-semibold text-white shadow-lg"
       style={{ background }}
+      title={label}
     >
       {buildInitials(label)}
     </div>
